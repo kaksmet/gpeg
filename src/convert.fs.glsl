@@ -4,20 +4,23 @@ in vec2 v_tex_coords;
 
 out vec3 color;
 
-uniform ivec2 plane_dims;
+uniform ivec2 dims;
 uniform isampler2D y_plane;
 uniform isampler2D cb_plane;
 uniform isampler2D cr_plane;
+uniform vec2 y_plane_scale;
+uniform vec2 cb_plane_scale;
+uniform vec2 cr_plane_scale;
 
 void main() {
-  ivec2 y_tex_coords = ivec2(v_tex_coords * plane_dims);
-  // one shift for decimated color plane, and one for the data being on only
-  // one quadrant of the texture
-  ivec2 c_tex_coords = y_tex_coords >> 2;
+  vec2 tex_coords = v_tex_coords * dims;
+  ivec2 y_tex_coords = ivec2(tex_coords * y_plane_scale * y_plane_scale);
+  ivec2 cb_tex_coords = ivec2(tex_coords * cb_plane_scale * cb_plane_scale);
+  ivec2 cr_tex_coords = ivec2(tex_coords * cr_plane_scale * cr_plane_scale);
 
   float y = float(texelFetch(y_plane, y_tex_coords, 0).r) + 128;
-  float cb = float(texelFetch(cb_plane, c_tex_coords, 0).r);
-  float cr = float(texelFetch(cr_plane, c_tex_coords, 0).r);
+  float cb = float(texelFetch(cb_plane, cb_tex_coords, 0).r);
+  float cr = float(texelFetch(cr_plane, cr_tex_coords, 0).r);
 
   float r = y + 1.402 * cr;
   float g = y - 0.34414 * cb - 0.71414 * cr;

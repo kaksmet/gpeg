@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate glium;
 extern crate gpeg;
+extern crate jpeg_decoder as jpeg;
 
-use gpeg::{pack_coeffs, read_data, Plane};
+use gpeg::{pack_coeffs, Plane};
 use std::borrow::Cow;
+use std::fs::File;
 use std::rc::Rc;
 use glium::{DisplayBuild, Surface};
 use glium::backend::Facade;
@@ -224,7 +226,8 @@ fn decode_plane(ctx: &DecodeContext, plane: &Plane) -> glium::texture::IntegralT
 }
 
 fn convert_planes(ctx: &DecodeContext, width: u32, height: u32,
-                  textures: &Vec<glium::texture::IntegralTexture2d>)
+                  textures: &Vec<glium::texture::IntegralTexture2d>,
+                  plane_scales: &[(f32, f32)])
                   -> glium::texture::Texture2d {
     let output = glium::texture::Texture2d::empty_with_format(
         &ctx.facade,
@@ -233,10 +236,13 @@ fn convert_planes(ctx: &DecodeContext, width: u32, height: u32,
         width, height).unwrap();
     let indices = glium::index::NoIndices(glium::index::PrimitiveType::TriangleStrip);
     let uniforms = uniform! {
-        plane_dims: [width as i32, height as i32],
+        dims: [width as i32, height as i32],
         y_plane: &textures[0],
         cb_plane: &textures[1],
         cr_plane: &textures[2],
+        y_plane_scale: plane_scales[0],
+        cb_plane_scale: plane_scales[1],
+        cr_plane_scale: plane_scales[2],
     };
     {
         let mut target = glium::framebuffer::SimpleFrameBuffer::new( &ctx.facade, &output).unwrap();
@@ -249,27 +255,46 @@ fn convert_planes(ctx: &DecodeContext, width: u32, height: u32,
 fn main() {
     let display = glium::glutin::WindowBuilder::new().with_dimensions(1024, 1024).build_glium().unwrap();
     loop {
-        let width = 1024;
-        let height = 576;
+        let mut decoder = jpeg::Decoder::new(File::open("pomegranate.jpg").unwrap());
+        let (mut coefficients, quantization_tables) = decoder.decode_coefficients().unwrap();
+        let metadata = decoder.metadata().unwrap();
+        let width = metadata.width as u32;
+        let height = metadata.height as u32;
+        let padded_width = metadata.plane_size_blocks[0].0 as u32 * 8;
+        let padded_height = metadata.plane_size_blocks[0].1 as u32 * 8;
 
-        let raw_planes = vec![(width, height, "f1.Y"),
-                              (width >> 1, height >> 1, "f1.Cb"),
-                              (width >> 1, height >> 1, "f1.Cr")];
-        let planes: Vec<Plane> = raw_planes.iter().map(|&(w, h, f)| {
-                let data = read_data(f);
-                assert!((w * h) as usize == data.len());
-                let (packed_coeffs, packed_indices) = pack_coeffs(w, h, &data);
+        assert_eq!(metadata.src_color_space, jpeg::ColorSpace::YCbCr);
+
+        for (i, plane_coefficients) in coefficients.iter_mut().enumerate() {
+            for block_coefficients in plane_coefficients.chunks_mut(64) {
+                for j in 0 .. 64 {
+                    block_coefficients[j] *= quantization_tables[i][j] as i16;
+                }
+            }
+        }
+
+        let raw_planes = vec![(metadata.plane_size_blocks[0], &coefficients[0]),
+                              (metadata.plane_size_blocks[1], &coefficients[1]),
+                              (metadata.plane_size_blocks[2], &coefficients[2])];
+        let planes: Vec<Plane> = raw_planes.iter().map(|&((w, h), data)| {
+                assert_eq!(w as usize * h as usize * 64, data.len());
+                let (packed_coeffs, packed_indices) = pack_coeffs(w as u32 * 8, h as u32 * 8, data);
+
                 Plane {
-                    width: w,
-                    height: h,
+                    width: w as u32 * 8,
+                    height: h as u32 * 8,
                     packed_coeffs: packed_coeffs,
                     packed_indices: packed_indices,
                 }
         }).collect();
+        let plane_scales: Vec<(f32, f32)> = metadata.plane_sampling_factor.iter().map(|&(h, v)| {
+            let (max_h, max_v) = metadata.max_sampling_factor;
+            (h as f32 / max_h as f32, v as f32 / max_v as f32)
+        }).collect();
 
-        let ctx = DecodeContext::new(display.get_context().clone(), width, height);
+        let ctx = DecodeContext::new(display.get_context().clone(), padded_width, padded_height);
         let output: Vec<_> = planes.iter().map(|p| decode_plane(&ctx, p)).collect();
-        let image = convert_planes(&ctx, width, height, &output);
+        let image = convert_planes(&ctx, width, height, &output, &plane_scales);
 
         // 16:9
         let v1 = Vertex { position: [-0.75, -0.09375], tex_coords: [0.0, 1.0] };

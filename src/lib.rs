@@ -69,43 +69,33 @@ fn pack(zeros: u16, value: i16) -> u16 {
 pub fn pack_coeffs(width: u32, height: u32, data: &[i16]) -> (Vec<u16>, Vec<u32>) {
     let block_width = (width >> 3) as usize;
     let block_height = (height >> 3) as usize;
-    let zigzag = make_zigzag_table(width);
 
     let mut packed: Vec<u16> = vec![];
     let mut indices: Vec<u32> = vec![];
 
-    for by in 0..block_height {
-        for bx in 0..block_width {
-            indices.push(packed.len() as u32);
+    for i in 0..block_width * block_height {
+        indices.push(packed.len() as u32);
 
-            let block_offset = (by << 3) * (width as usize) + (bx << 3);
-            let mut coeffs = vec![];
-            for j in 0..8 {
-                for i in 0..8 {
-                    coeffs.push(data[block_offset + zigzag[j][i]]);
-                }
+        let coeffs = &data[i * 64 .. (i + 1) * 64];
+        let mut zeros = 0;
+        for &coeff in coeffs {
+            if coeff == 0 {
+                zeros += 1;
+                continue
             }
-
-            let mut zeros = 0;
-            for coeff in coeffs {
-                if coeff == 0 {
-                    zeros += 1;
-                    continue
-                }
-                while zeros > 15 {
-                    // we must store 15 zeros with a zero, followed by our
-                    // packed coefficient
-                    packed.push(pack(15, 0));
-                    zeros -= 16;
-                }
-                packed.push(pack(zeros, coeff));
-                zeros = 0;
+            while zeros > 15 {
+                // we must store 15 zeros with a zero, followed by our
+                // packed coefficient
+                packed.push(pack(15, 0));
+                zeros -= 16;
             }
-            // remaining zeros (if any) have a special symbol of 0, no
-            // matter how many there were
-            if zeros > 0 {
-                packed.push(0);
-            }
+            packed.push(pack(zeros, coeff));
+            zeros = 0;
+        }
+        // remaining zeros (if any) have a special symbol of 0, no
+        // matter how many there were
+        if zeros > 0 {
+            packed.push(0);
         }
     }
 
